@@ -851,6 +851,7 @@ def run_dashboard(
     stop_event = threading.Event()
     state: dict[str, Any] = {
         "last_sync_at": None,
+        "last_sync_ts": None,
         "last_result": "idle",
         "last_message": "waiting for first sync",
         "needs_cookie": False,
@@ -903,22 +904,37 @@ def run_dashboard(
                 page_size,
                 print_response=False,
             )
+            now_ts = int(time.time())
             update_state(
                 last_sync_at=dt.datetime.now().isoformat(timespec="seconds"),
+                last_sync_ts=now_ts,
                 last_result="ok",
                 last_message=f"sync success: pages={pages}, new_records={inserted}",
                 needs_cookie=False,
             )
-        except ApiCodeError as exc:
+        except SystemExit as exc:
+            now_ts = int(time.time())
             update_state(
                 last_sync_at=dt.datetime.now().isoformat(timespec="seconds"),
+                last_sync_ts=now_ts,
+                last_result="failed",
+                last_message=f"config error: {exc}",
+                needs_cookie=True,
+            )
+        except ApiCodeError as exc:
+            now_ts = int(time.time())
+            update_state(
+                last_sync_at=dt.datetime.now().isoformat(timespec="seconds"),
+                last_sync_ts=now_ts,
                 last_result="failed",
                 last_message=f"api error: code={exc.code}, msg={exc.msg}",
                 needs_cookie=True,
             )
         except Exception as exc:
+            now_ts = int(time.time())
             update_state(
                 last_sync_at=dt.datetime.now().isoformat(timespec="seconds"),
+                last_sync_ts=now_ts,
                 last_result="failed",
                 last_message=f"sync failed: {exc}",
             )
@@ -1082,10 +1098,10 @@ def run_dashboard(
         let nextSyncIn = intervalSeconds;
         if (s.running) {
           nextSyncIn = 0;
-        } else if (s.last_sync_at) {
-          const ts = Date.parse(s.last_sync_at);
-          if (!Number.isNaN(ts)) {
-            const elapsed = Math.floor((Date.now() - ts) / 1000);
+        } else if (s.last_sync_ts) {
+          const tsSeconds = Number(s.last_sync_ts);
+          if (!Number.isNaN(tsSeconds) && tsSeconds > 0) {
+            const elapsed = Math.floor(Date.now() / 1000 - tsSeconds);
             nextSyncIn = Math.max(intervalSeconds - elapsed, 0);
           }
         }
@@ -1095,7 +1111,8 @@ def run_dashboard(
         const statusEl = document.getElementById('status');
         const isOk = s.last_result === 'ok';
         statusEl.className = 'status ' + (isOk ? 'ok' : 'bad');
-        statusEl.textContent = `[${s.last_sync_at || '-'}] ${s.last_message || '-'}`;
+        const lastText = s.last_sync_ts ? new Date(Number(s.last_sync_ts) * 1000).toLocaleString() : '-';
+        statusEl.textContent = `[${lastText}] ${s.last_message || '-'}`;
 
         const form = document.getElementById('cookie-form');
         form.className = 'cookie-form' + (s.needs_cookie ? ' show' : '');
