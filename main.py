@@ -236,21 +236,42 @@ def rotate_cur_to_old(conn: sqlite3.Connection) -> None:
 
 
 def query_abnormal_order_ids(conn: sqlite3.Connection) -> list[int]:
-    rows = conn.execute("""
-        SELECT DISTINCT s.order_id
-        FROM (
+    rows = conn.execute(
+        """
+        WITH merged AS (
             SELECT order_id, sku_id, pay_amount FROM cur
             UNION
             SELECT order_id, sku_id, pay_amount FROM "old"
-        ) AS s
-        JOIN abnormal_rules r
-          ON s.sku_id = r.sku_id
-         AND COALESCE(r.enabled, 0) = 1
-       WHERE s.order_id IS NOT NULL
-         AND s.pay_amount >= r.min_pay_amount
-         AND s.pay_amount <= r.max_pay_amount
-       ORDER BY s.order_id
-        """).fetchall()
+        ),
+        matched AS (
+            SELECT
+                m.order_id,
+                r.sku_id,
+                r.min_pay_amount,
+                r.max_pay_amount
+            FROM merged m
+            JOIN abnormal_rules r
+              ON m.sku_id = r.sku_id
+             AND COALESCE(r.enabled, 0) = 1
+           WHERE m.order_id IS NOT NULL
+             AND m.pay_amount >= r.min_pay_amount
+             AND m.pay_amount <= r.max_pay_amount
+        ),
+        qualified_rules AS (
+            SELECT sku_id, min_pay_amount, max_pay_amount
+            FROM matched
+            GROUP BY sku_id, min_pay_amount, max_pay_amount
+            HAVING COUNT(DISTINCT order_id) >= 2
+        )
+        SELECT DISTINCT m.order_id
+        FROM matched m
+        JOIN qualified_rules q
+          ON m.sku_id = q.sku_id
+         AND m.min_pay_amount = q.min_pay_amount
+         AND m.max_pay_amount = q.max_pay_amount
+        ORDER BY m.order_id
+        """
+    ).fetchall()
     return [int(row[0]) for row in rows]
 
 
@@ -265,18 +286,37 @@ def mark_abnormal_orders(conn: sqlite3.Connection) -> tuple[int, list[int]]:
         SET is_abnormal = 1
         WHERE COALESCE(is_abnormal, 0) = 0
           AND order_id IN (
-              SELECT DISTINCT s.order_id
-              FROM (
+              WITH merged AS (
                   SELECT order_id, sku_id, pay_amount FROM cur
                   UNION
                   SELECT order_id, sku_id, pay_amount FROM "old"
-              ) AS s
-              JOIN abnormal_rules r
-                ON s.sku_id = r.sku_id
-               AND COALESCE(r.enabled, 0) = 1
-             WHERE s.order_id IS NOT NULL
-               AND s.pay_amount >= r.min_pay_amount
-               AND s.pay_amount <= r.max_pay_amount
+              ),
+              matched AS (
+                  SELECT
+                      m.order_id,
+                      r.sku_id,
+                      r.min_pay_amount,
+                      r.max_pay_amount
+                  FROM merged m
+                  JOIN abnormal_rules r
+                    ON m.sku_id = r.sku_id
+                   AND COALESCE(r.enabled, 0) = 1
+                 WHERE m.order_id IS NOT NULL
+                   AND m.pay_amount >= r.min_pay_amount
+                   AND m.pay_amount <= r.max_pay_amount
+              ),
+              qualified_rules AS (
+                  SELECT sku_id, min_pay_amount, max_pay_amount
+                  FROM matched
+                  GROUP BY sku_id, min_pay_amount, max_pay_amount
+                  HAVING COUNT(DISTINCT order_id) >= 2
+              )
+              SELECT DISTINCT m.order_id
+              FROM matched m
+              JOIN qualified_rules q
+                ON m.sku_id = q.sku_id
+               AND m.min_pay_amount = q.min_pay_amount
+               AND m.max_pay_amount = q.max_pay_amount
           )
         """)
     return conn.total_changes - before, abnormal_order_ids
