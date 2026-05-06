@@ -236,8 +236,7 @@ def rotate_cur_to_old(conn: sqlite3.Connection) -> None:
 
 
 def query_abnormal_order_ids(conn: sqlite3.Connection) -> list[int]:
-    rows = conn.execute(
-        """
+    rows = conn.execute("""
         WITH merged AS (
             SELECT order_id, sku_id, pay_amount FROM cur
             UNION
@@ -270,8 +269,7 @@ def query_abnormal_order_ids(conn: sqlite3.Connection) -> list[int]:
          AND m.min_pay_amount = q.min_pay_amount
          AND m.max_pay_amount = q.max_pay_amount
         ORDER BY m.order_id
-        """
-    ).fetchall()
+        """).fetchall()
     return [int(row[0]) for row in rows]
 
 
@@ -969,7 +967,7 @@ def run_dashboard(
             self.wfile.write(body)
 
         def do_POST(self) -> None:
-            if self.path.split("?", 1)[0] != "/update-cookie":
+            if self.path.split("?", 1)[0] != "/api/update-cookie":
                 self.send_error(404, "Not Found")
                 return
 
@@ -1047,7 +1045,7 @@ def run_dashboard(
         <div id='countdown' class='countdown'>下次同步倒计时: --s</div>
       </div>
       <div id='status' class='status ok'>loading...</div>
-      <form id='cookie-form' class='cookie-form' method='post' action='/update-cookie'>
+      <form id='cookie-form' class='cookie-form' method='post' action='/api/update-cookie'>
         <label for='cookie'>JD_COOKIE (接口返回 code != 1 时请更新)</label>
         <textarea id='cookie' name='cookie' placeholder='Paste new JD_COOKIE here' required></textarea>
         <button type='submit'>更新 JD_COOKIE 并立即同步</button>
