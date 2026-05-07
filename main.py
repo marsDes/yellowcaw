@@ -249,12 +249,11 @@ def query_abnormal_order_ids(conn: sqlite3.Connection) -> list[int]:
                 r.min_pay_amount,
                 r.max_pay_amount
             FROM merged m
-            JOIN abnormal_rules r
-              ON m.sku_id = r.sku_id
-             AND COALESCE(r.enabled, 0) = 1
-           WHERE m.order_id IS NOT NULL
-             AND m.pay_amount >= r.min_pay_amount
-             AND m.pay_amount <= r.max_pay_amount
+           JOIN abnormal_rules r
+             ON m.sku_id = r.sku_id
+            AND COALESCE(r.enabled, 0) = 1
+          WHERE m.order_id IS NOT NULL
+            AND m.pay_amount >= r.min_pay_amount
         ),
         qualified_rules AS (
             SELECT sku_id, min_pay_amount, max_pay_amount
@@ -301,7 +300,6 @@ def mark_abnormal_orders(conn: sqlite3.Connection) -> tuple[int, list[int]]:
                    AND COALESCE(r.enabled, 0) = 1
                  WHERE m.order_id IS NOT NULL
                    AND m.pay_amount >= r.min_pay_amount
-                   AND m.pay_amount <= r.max_pay_amount
               ),
               qualified_rules AS (
                   SELECT sku_id, min_pay_amount, max_pay_amount
@@ -1069,6 +1067,24 @@ def run_dashboard(
   <script>
     window.__nextSyncIn = null;
 
+    async function submitCookieForm(event) {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const formData = new FormData(form);
+      try {
+        await fetch(form.action, {
+          method: 'POST',
+          body: new URLSearchParams(formData),
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        });
+        window.location.reload();
+      } catch (e) {
+        const statusEl = document.getElementById('status');
+        statusEl.className = 'status bad';
+        statusEl.textContent = 'cookie 更新失败，请重试';
+      }
+    }
+
     function updateCountdown() {
       const el = document.getElementById('countdown');
       if (!el) return;
@@ -1129,6 +1145,7 @@ def run_dashboard(
     }
 
     refresh();
+    document.getElementById('cookie-form').addEventListener('submit', submitCookieForm);
     setInterval(updateCountdown, 1000);
     setInterval(refresh, 5000);
   </script>
