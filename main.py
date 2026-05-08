@@ -25,7 +25,7 @@ except ImportError:
 
 load_dotenv()
 API_URL = (
-    "https://jzt-api.jd.com/union/cid/data/queryTrackOrderDetailList?requestFrom=0"
+    "https://jzt-api.jd.com/union/cid/data/queryCallbackOrderDetailList?requestFrom=0"
 )
 
 ORDER_COLUMNS = [
@@ -238,13 +238,14 @@ def rotate_cur_to_old(conn: sqlite3.Connection) -> None:
 def query_abnormal_order_ids(conn: sqlite3.Connection) -> list[int]:
     rows = conn.execute("""
         WITH merged AS (
-            SELECT order_id, sku_id, pay_amount FROM cur
+            SELECT order_id, sku_id, pay_amount, account_id FROM cur
             UNION
-            SELECT order_id, sku_id, pay_amount FROM "old"
+            SELECT order_id, sku_id, pay_amount, account_id FROM "old"
         ),
         matched AS (
             SELECT
                 m.order_id,
+                m.account_id,
                 r.sku_id,
                 r.min_pay_amount,
                 r.max_pay_amount
@@ -253,18 +254,20 @@ def query_abnormal_order_ids(conn: sqlite3.Connection) -> list[int]:
              ON m.sku_id = r.sku_id
             AND COALESCE(r.enabled, 0) = 1
           WHERE m.order_id IS NOT NULL
+            AND m.account_id IS NOT NULL
             AND m.pay_amount >= r.min_pay_amount
         ),
         qualified_rules AS (
-            SELECT sku_id, min_pay_amount, max_pay_amount
+            SELECT account_id, sku_id, min_pay_amount, max_pay_amount
             FROM matched
-            GROUP BY sku_id, min_pay_amount, max_pay_amount
+            GROUP BY account_id, sku_id, min_pay_amount, max_pay_amount
             HAVING COUNT(DISTINCT order_id) >= 2
         )
         SELECT DISTINCT m.order_id
         FROM matched m
         JOIN qualified_rules q
-          ON m.sku_id = q.sku_id
+          ON m.account_id = q.account_id
+         AND m.sku_id = q.sku_id
          AND m.min_pay_amount = q.min_pay_amount
          AND m.max_pay_amount = q.max_pay_amount
         ORDER BY m.order_id
@@ -284,13 +287,14 @@ def mark_abnormal_orders(conn: sqlite3.Connection) -> tuple[int, list[int]]:
         WHERE COALESCE(is_abnormal, 0) = 0
           AND order_id IN (
               WITH merged AS (
-                  SELECT order_id, sku_id, pay_amount FROM cur
+                  SELECT order_id, sku_id, pay_amount, account_id FROM cur
                   UNION
-                  SELECT order_id, sku_id, pay_amount FROM "old"
+                  SELECT order_id, sku_id, pay_amount, account_id FROM "old"
               ),
               matched AS (
                   SELECT
                       m.order_id,
+                      m.account_id,
                       r.sku_id,
                       r.min_pay_amount,
                       r.max_pay_amount
@@ -298,21 +302,23 @@ def mark_abnormal_orders(conn: sqlite3.Connection) -> tuple[int, list[int]]:
                   JOIN abnormal_rules r
                     ON m.sku_id = r.sku_id
                    AND COALESCE(r.enabled, 0) = 1
-                 WHERE m.order_id IS NOT NULL
-                   AND m.pay_amount >= r.min_pay_amount
+                  WHERE m.order_id IS NOT NULL
+                    AND m.account_id IS NOT NULL
+                    AND m.pay_amount >= r.min_pay_amount
               ),
               qualified_rules AS (
-                  SELECT sku_id, min_pay_amount, max_pay_amount
+                  SELECT account_id, sku_id, min_pay_amount, max_pay_amount
                   FROM matched
-                  GROUP BY sku_id, min_pay_amount, max_pay_amount
+                  GROUP BY account_id, sku_id, min_pay_amount, max_pay_amount
                   HAVING COUNT(DISTINCT order_id) >= 2
               )
               SELECT DISTINCT m.order_id
               FROM matched m
               JOIN qualified_rules q
-                ON m.sku_id = q.sku_id
-               AND m.min_pay_amount = q.min_pay_amount
-               AND m.max_pay_amount = q.max_pay_amount
+                ON m.account_id = q.account_id
+               AND m.sku_id = q.sku_id
+                AND m.min_pay_amount = q.min_pay_amount
+                AND m.max_pay_amount = q.max_pay_amount
           )
         """)
     return conn.total_changes - before, abnormal_order_ids
@@ -859,7 +865,7 @@ def run_dashboard(
         try:
             init_db(conn)
             rows = conn.execute("""
-                SELECT order_id, sku_id, platform_name, account_id, account_name
+                SELECT order_id, sku_id, order_time, platform_name, account_id, account_name
                 FROM records
                 WHERE COALESCE(is_abnormal, 0) = 1
                 ORDER BY id DESC
@@ -869,9 +875,10 @@ def run_dashboard(
                 {
                     "order_id": row[0],
                     "sku_id": row[1],
-                    "platform_name": row[2],
-                    "account_id": row[3],
-                    "account_name": row[4],
+                    "order_time": row[2],
+                    "platform_name": row[3],
+                    "account_id": row[4],
+                    "account_name": row[5],
                 }
                 for row in rows
             ]
@@ -1054,12 +1061,13 @@ def run_dashboard(
             <tr>
               <th>订单Id</th>
               <th>skuId</th>
+              <th>下单时间</th>
               <th>平台</th>
               <th>账号Id</th>
               <th>账号名称</th>
             </tr>
           </thead>
-          <tbody id='tbody'><tr><td colspan='5'>Loading...</td></tr></tbody>
+          <tbody id='tbody'><tr><td colspan='6'>Loading...</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -1133,9 +1141,9 @@ def run_dashboard(
 
         const tbody = document.getElementById('tbody');
         if (!rows.length) {
-          tbody.innerHTML = "<tr><td colspan='5'>No abnormal records</td></tr>";
+          tbody.innerHTML = "<tr><td colspan='6'>No abnormal records</td></tr>";
         } else {
-          tbody.innerHTML = rows.map(r => `<tr><td>${r.order_id ?? ''}</td><td>${r.sku_id ?? ''}</td><td>${r.platform_name ?? ''}</td><td>${r.account_id ?? ''}</td><td>${r.account_name ?? ''}</td></tr>`).join('');
+          tbody.innerHTML = rows.map(r => `<tr><td>${r.order_id ?? ''}</td><td>${r.sku_id ?? ''}</td><td>${r.order_time ?? ''}</td><td>${r.platform_name ?? ''}</td><td>${r.account_id ?? ''}</td><td>${r.account_name ?? ''}</td></tr>`).join('');
         }
       } catch (e) {
         const statusEl = document.getElementById('status');
